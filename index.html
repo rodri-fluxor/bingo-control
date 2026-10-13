@@ -127,6 +127,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .prize-category.terna { border-left-color: var(--orange); }
 .prize-category.quintina { border-left-color: var(--accent); }
 .prize-category.lleno { border-left-color: var(--yellow); }
+.prize-category.consuelo { border-left-color: #38BDF8; }
 .prize-cat-title {
   font-family: 'Nunito', sans-serif; font-size: 0.72rem; font-weight: 800;
   text-transform: uppercase; letter-spacing: 0.1em;
@@ -134,6 +135,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .terna .prize-cat-title { color: var(--orange); }
 .quintina .prize-cat-title { color: var(--accent); }
 .lleno .prize-cat-title { color: var(--yellow); }
+.consuelo .prize-cat-title { color: #38BDF8; }
 .prize-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto; }
 .prize-item { font-size: 0.78rem; display: flex; justify-content: space-between; align-items: center; }
 .prize-pack { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -339,6 +341,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       <div class="stat-row"><span class="stat-label">Terna(s) activa(s)</span><span class="stat-val" id="statTerna" style="color:var(--orange)">0</span></div>
       <div class="stat-row"><span class="stat-label">Quintina(s)</span><span class="stat-val" id="statQuintina" style="color:var(--accent)">0</span></div>
       <div class="stat-row"><span class="stat-label">Cartón(es) lleno(s)</span><span class="stat-val" id="statLleno" style="color:var(--yellow)">0</span></div>
+      <div class="stat-row"><span class="stat-label">Premio(s) consuelo</span><span class="stat-val" id="statConsuelo" style="color:#38BDF8">0</span></div>
     </div>
   </div>
 
@@ -370,6 +373,10 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       <div class="prize-category lleno">
         <div class="prize-cat-title">🌟 Cartón Lleno</div>
         <div class="prize-list" id="listLleno"><div class="no-prizes">Aún no</div></div>
+      </div>
+      <div class="prize-category consuelo">
+        <div class="prize-cat-title">🎗️ Premios Consuelo</div>
+        <div class="prize-list" id="listConsuelo"><div class="no-prizes">Aún no</div></div>
       </div>
     </div>
 
@@ -807,6 +814,7 @@ function recalc() {
     renderPrizeList('listQuintina', cappedPrizes.quintina);
     renderPrizeList('listLleno', cappedPrizes.lleno);
   }
+  renderConsueloDetectados();
   if (typeof renderGanadores === 'function') renderGanadores();
 }
 
@@ -1101,7 +1109,19 @@ function renderGanadores() {
   }
 }
 
+function renderConsueloDetectados() {
+  document.getElementById('statConsuelo').textContent = prevConsuelo.length;
+  const el = document.getElementById('listConsuelo');
+  if (!prevConsuelo.length) { el.innerHTML = '<div class="no-prizes">Aún no</div>'; return; }
+  el.innerHTML = prevConsuelo.map(k => {
+    const owner = getOwnerName(k);
+    const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
+    return `<div class="prize-tag">${k}${ownerSpan}</div>`;
+  }).join('');
+}
+
 function refreshOwnerViews() {
+  renderConsueloDetectados();
   renderPrizeListWithOwner('terna', prevPrizes.terna, 'listTerna');
   renderPrizeListWithOwner('quintina', prevPrizes.quintina, 'listQuintina');
   renderPrizeListWithOwner('lleno', prevPrizes.lleno, 'listLleno');
