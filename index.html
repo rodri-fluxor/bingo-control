@@ -155,6 +155,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .toast.terna { border-left: 4px solid var(--orange); }
 .toast.quintina { border-left: 4px solid var(--accent); }
 .toast.lleno { border-left: 4px solid var(--yellow); }
+.toast.consuelo { border-left: 4px solid #38BDF8; }
 .toast-icon { font-size: 1.5rem; }
 .toast-msg { font-size: 0.85rem; color: var(--muted); font-family: 'Inter', sans-serif; font-weight: 400; margin-top: 2px; }
 
@@ -192,12 +193,12 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .btn-cancel:hover { border-color: var(--red); color: var(--red); }
 
 /* ===== PREMIO CONFIG TAB ===== */
-.tabs { display: flex; gap: 4px; background: var(--panel2); border-radius: 8px; padding: 4px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--panel2); border-radius: 8px; padding: 4px; }
 .tab {
-  flex: 1; padding: 6px; border: none; border-radius: 6px;
+  flex: 1 1 calc(50% - 4px); min-width: 0; padding: 6px 4px; border: none; border-radius: 6px; white-space: nowrap;
   background: transparent; color: var(--muted);
-  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.75rem;
-  text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+  font-family: 'Nunito', sans-serif; font-weight: 700; font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;
   transition: all 0.15s;
 }
 .tab.active { background: var(--panel); color: var(--text); }
@@ -257,6 +258,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .terna-col { border-left-color: var(--orange); }
 .quintina-col { border-left-color: var(--accent); }
 .lleno-col { border-left-color: var(--yellow); }
+.consuelo-col { border-left-color: #38BDF8; }
 
 
 /* ===== PACK NAMES ===== */
@@ -389,6 +391,11 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
         <div class="ganadores-cat-title" style="color:#A855F7">🎁 Premio Sorpresa</div>
         <div class="ganadores-list" id="ganaList-sorpresa"></div>
       </div>
+      <div class="ganadores-section">
+        <div class="ganadores-cat-title" style="color:#38BDF8">🎗️ Premios Consuelo</div>
+        <div style="font-size:0.7rem;color:var(--muted)">Se llenan solos: cartones llenos que no ganaron terna, quintina ni cartón lleno.</div>
+        <div class="ganadores-list" id="ganaList-consuelo"></div>
+      </div>
     </div>
 
     <!-- TAB: CONFIG -->
@@ -426,6 +433,14 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
           <button class="qty-btn" onclick="changeQty('sorpresa',1)">+</button>
         </div>
       </div>
+      <div class="premio-config-row">
+        <label>🎗️ Premios Consuelo</label>
+        <div class="qty-ctrl">
+          <button class="qty-btn" onclick="changeQty('consuelo',-1)">−</button>
+          <span class="qty-val" id="qty-consuelo">4</span>
+          <button class="qty-btn" onclick="changeQty('consuelo',1)">+</button>
+        </div>
+      </div>
       <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">
         Los cambios se aplican inmediatamente en la pestaña Ganadores.
       </div>
@@ -444,7 +459,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
         <button class="btn-sm" onclick="showImportModal()" style="border-color:var(--accent);color:var(--accent)">📋 Pegar lista</button>
       </div>
       <!-- Import modal -->
-      <div id="importModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:flex;align-items:center;justify-content:center;display:none">
+      <div id="importModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center">
         <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(480px,95vw);display:flex;flex-direction:column;gap:12px">
           <div style="font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem">📋 Importar lista de nombres</div>
           <div style="font-size:0.75rem;color:var(--muted);line-height:1.5">
@@ -494,6 +509,8 @@ const PACKS = [[[[3, 14, 0, 0, 40, 0, 61, 0, 85], [0, 0, 27, 32, 0, 54, 0, 75, 9
 let bolillas = new Set(); // marked numbers
 let lastBall = null;
 let prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+let prevConsuelo = []; // cartones llenos sin premio previo, en orden de aparición
+let quietMode = false; // true mientras se recalcula el historial (sin avisos)
 
 // === INIT ===
 function initBolillero() {
@@ -521,8 +538,8 @@ function updatePackCount() {
   document.getElementById('packCount').textContent = count;
   document.getElementById('cartonCount').textContent = count * 3;
 }
-document.getElementById('packDesde').addEventListener('input', () => { updatePackCount(); recalc(); });
-document.getElementById('packHasta').addEventListener('input', () => { updatePackCount(); recalc(); });
+document.getElementById('packDesde').addEventListener('input', () => { updatePackCount(); rebuildFromHistory(); });
+document.getElementById('packHasta').addEventListener('input', () => { updatePackCount(); rebuildFromHistory(); });
 updatePackCount();
 
 // === ENTRY ===
@@ -602,15 +619,26 @@ function retrocederBolilla() {
   const hist = document.getElementById('historial');
   if (hist.firstChild) hist.removeChild(hist.firstChild);
 
-  // Reset prevPrizes completely and recalculate from scratch
-  prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
-
-  document.getElementById('bolillasCount').textContent = bolillas.size;
   document.getElementById('entryHint').textContent = '↩ Bolilla ' + last + ' eliminada';
   setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
 
-  recalc();
+  // Recalcula en orden desde la primera bolilla (sin avisos) para respetar topes y empates
+  rebuildFromHistory();
   entryInput.focus();
+}
+
+function rebuildFromHistory() {
+  quietMode = true;
+  try {
+    bolillas = new Set();
+    prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+    prevConsuelo = [];
+    for (const n of bolillasHistory) { bolillas.add(n); recalc(); }
+    if (!bolillasHistory.length) recalc();
+  } finally {
+    quietMode = false;
+  }
+  document.getElementById('bolillasCount').textContent = bolillas.size;
 }
 
 // === IMPORT PACK NAMES ===
@@ -646,6 +674,7 @@ function doImportNames() {
       imported++;
     }
   });
+  refreshOwnerViews();
   document.getElementById('importPreview').textContent = '✓ ' + imported + ' nombres importados.';
   setTimeout(() => closeImportModal(), 800);
 }
@@ -721,6 +750,23 @@ function recalc() {
     for (const k of newThisRound) cappedPrizes[type].add(k);
   });
 
+  // --- Premios consuelo: cartones llenos que NO ganaron terna/quintina/lleno ---
+  const wonSet = new Set([...cappedPrizes.terna, ...cappedPrizes.quintina, ...cappedPrizes.lleno]);
+  ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack) wonSet.add(w.pack); }));
+  const cappedConsuelo = [...prevConsuelo];
+  const consCap = QTYS.consuelo || 0;
+  if (consCap > 0 && cappedConsuelo.length < consCap) {
+    const fresh = [...newPrizes.lleno].filter(k => !wonSet.has(k) && !cappedConsuelo.includes(k)).sort();
+    fresh.forEach(k => cappedConsuelo.push(k));
+  }
+  for (const key of cappedConsuelo) {
+    if (!prevConsuelo.includes(key)) {
+      const owner = getOwnerName(key);
+      showToast('consuelo', '🎗️ ¡PREMIO CONSUELO!', key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : ''));
+    }
+  }
+  prevConsuelo = cappedConsuelo;
+
   // Notify NEW prizes (only those just added to cappedPrizes)
   for (const key of cappedPrizes.lleno) {
     if (!prevPrizes.lleno.has(key)) {
@@ -778,16 +824,27 @@ function renderPrizeList(id, prizeSet) {
 }
 
 // === TOAST ===
-let toastTimeout = null;
+const toastQueue = [];
+let toastBusy = false;
 function showToast(type, title, msg) {
+  if (quietMode) return;
+  toastQueue.push({ type, title, msg });
+  if (!toastBusy) nextToast();
+}
+function nextToast() {
+  const item = toastQueue.shift();
   const t = document.getElementById('toast');
-  const icons = { terna: '🔥', quintina: '⚡', lleno: '🌟' };
-  document.getElementById('toastIcon').textContent = icons[type];
-  document.getElementById('toastTitle').textContent = title;
-  document.getElementById('toastMsg').textContent = msg;
-  t.className = 'toast ' + type + ' show';
-  if (toastTimeout) clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => { t.classList.remove('show'); }, 3500);
+  if (!item) { toastBusy = false; t.classList.remove('show'); return; }
+  toastBusy = true;
+  const icons = { terna: '🔥', quintina: '⚡', lleno: '🌟', consuelo: '🎗️' };
+  document.getElementById('toastIcon').textContent = icons[item.type] || '🏆';
+  document.getElementById('toastTitle').textContent = item.title;
+  document.getElementById('toastMsg').textContent = item.msg;
+  t.className = 'toast ' + item.type + ' show';
+  setTimeout(() => {
+    t.classList.remove('show');
+    setTimeout(nextToast, 350);
+  }, 3000);
 }
 
 // === RESET ===
@@ -796,6 +853,7 @@ function resetear() {
   bolillas.clear();
   bolillasHistory = [];
   lastBall = null;
+  prevConsuelo = [];
   prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
   document.getElementById('historial').innerHTML = '';
   document.getElementById('bolillasCount').textContent = '0';
@@ -814,11 +872,11 @@ function switchTab(name) {
 }
 
 // ===== PRIZE CONFIG =====
-const QTYS = { terna: 4, quintina: 4, lleno: 4, sorpresa: 4 };
+const QTYS = { terna: 4, quintina: 4, lleno: 4, sorpresa: 4, consuelo: 4 };
 function changeQty(type, delta) {
   QTYS[type] = Math.max(0, Math.min(20, QTYS[type] + delta));
   document.getElementById('qty-' + type).textContent = QTYS[type];
-  renderGanadores();
+  rebuildFromHistory();
 }
 
 // ===== WINNERS DATA =====
@@ -828,16 +886,6 @@ const WINNERS = { terna: [], quintina: [], lleno: [], sorpresa: [] };
 // ===== MODAL =====
 let modalContext = null; // { type, slot }
 
-function abrirModal(type, slot, prefillPack) {
-  modalContext = { type, slot, prefillPack };
-  const labels = { terna:'🔥 Terna', quintina:'⚡ Quintina', lleno:'🌟 Cartón Lleno', sorpresa:'🎁 Premio Sorpresa' };
-  document.getElementById('modalTitle').textContent = labels[type] + ' — Premio #' + (slot+1);
-  const sub = prefillPack ? `Pack detectado: ${prefillPack}` : 'Premio sorpresa — ingresá el ganador';
-  document.getElementById('modalSubtitle').textContent = sub;
-  document.getElementById('modalInput').value = '';
-  document.getElementById('modalBackdrop').classList.remove('hidden');
-  setTimeout(() => document.getElementById('modalInput').focus(), 50);
-}
 
 function cerrarModal() {
   document.getElementById('modalBackdrop').classList.add('hidden');
@@ -872,40 +920,6 @@ function borrarGanador(type, slot) {
   renderGanadores();
 }
 
-function renderGanadores() {
-  const types = ['terna','quintina','lleno','sorpresa'];
-  types.forEach(type => {
-    const el = document.getElementById('ganaList-' + type);
-    const qty = QTYS[type];
-    if (qty === 0) { el.innerHTML = '<div class="no-prizes">Sin premios configurados</div>'; return; }
-    let html = '';
-    for (let i = 0; i < qty; i++) {
-      const w = WINNERS[type] && WINNERS[type][i];
-      if (w) {
-        html += `<div class="ganador-row ${type}-col">
-          <span class="ganador-num">#${i+1}</span>
-          <span class="ganador-name">${escHtml(w.name)}</span>
-          <span class="ganador-pack">${escHtml(w.pack)}</span>
-          <button class="ganador-del" onclick="borrarGanador('${type}',${i})" title="Quitar">✕</button>
-        </div>`;
-      } else {
-        // Prefill pack from detected if available
-        let packHint = '';
-        if (type !== 'sorpresa') {
-          const detected = [...prevPrizes[type]].sort();
-          const alreadyWon = (WINNERS[type]||[]).filter(Boolean).map(w=>w.pack);
-          const next = detected.find(k => !alreadyWon.includes(k));
-          if (next) packHint = next;
-        }
-        html += `<div class="slot-empty" onclick="abrirModal('${type}',${i},'${packHint}')">
-          <span class="slot-num">#${i+1}</span>
-          <span>${packHint ? '🎯 ' + packHint + ' — clic para registrar' : 'Vacío — clic para registrar'}</span>
-        </div>`;
-      }
-    }
-    el.innerHTML = html;
-  });
-}
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -944,6 +958,7 @@ function onPackNameInput(num) {
     delete PACK_NAMES[num];
     inp.classList.remove('has-name');
   }
+  refreshOwnerViews();
 }
 
 function filterPackNames() {
@@ -965,6 +980,7 @@ function clearAllPackNames() {
     const inp = document.getElementById('pn-' + i);
     if (inp) { inp.value = ''; inp.classList.remove('has-name'); }
   }
+  refreshOwnerViews();
 }
 
 function exportPackNames() {
@@ -985,7 +1001,6 @@ function getOwnerName(packKey) {
 
 // ===== PATCH renderPrizeList to show owner name =====
 // Override after original definition
-const _origRenderPrizeList = typeof renderPrizeList === 'function' ? renderPrizeList : null;
 
 function renderPrizeListWithOwner(type, prizes, elId) {
   const el = document.getElementById(elId);
@@ -1003,7 +1018,6 @@ function renderPrizeListWithOwner(type, prizes, elId) {
 }
 
 // ===== PATCH abrirModal to auto-fill owner name =====
-const _origAbrirModal = abrirModal;
 function abrirModal(type, slot, prefillPack) {
   modalContext = { type, slot, prefillPack };
   const labels = { terna:'🔥 Terna', quintina:'⚡ Quintina', lleno:'🌟 Cartón Lleno', sorpresa:'🎁 Premio Sorpresa' };
@@ -1025,19 +1039,7 @@ function abrirModal(type, slot, prefillPack) {
   setTimeout(() => { inp.focus(); inp.select(); }, 50);
 }
 
-// ===== PATCH showToast to include owner name =====
-const _origShowToast = showToast;
-function showToast(msg, color, duration) {
-  _origShowToast(msg, color, duration);
-}
-
-// ===== PATCH recalc to use owner in toasts =====
-// We need to intercept the toast calls for new prizes.
-// The cleanest way: override the toast output after recalc detects new prizes.
-// We'll patch the new-prize notification in renderGanadores too.
-
-// ===== PATCH renderGanadores to auto-fill owner name in slots =====
-const _origRenderGanadores = renderGanadores;
+// ===== renderGanadores =====
 function renderGanadores() {
   const types = ['terna','quintina','lleno','sorpresa'];
   types.forEach(type => {
@@ -1045,6 +1047,7 @@ function renderGanadores() {
     const qty = QTYS[type];
     if (qty === 0) { el.innerHTML = '<div class="no-prizes">Sin premios configurados</div>'; return; }
     let html = '';
+    const usedHints = new Set((WINNERS[type]||[]).filter(Boolean).map(w=>w.pack));
     for (let i = 0; i < qty; i++) {
       const w = WINNERS[type] && WINNERS[type][i];
       if (w) {
@@ -1058,13 +1061,8 @@ function renderGanadores() {
         let packHint = '';
         let ownerHint = '';
         if (type !== 'sorpresa') {
-          const detected = [...prevPrizes[type]].sort();
-          const alreadyWon = (WINNERS[type]||[]).filter(Boolean).map(w=>w.pack);
-          const next = detected.find(k => !alreadyWon.includes(k));
-          if (next) {
-            packHint = next;
-            ownerHint = getOwnerName(next);
-          }
+          const next = [...prevPrizes[type]].find(k => !usedHints.has(k));
+          if (next) { packHint = next; ownerHint = getOwnerName(next); usedHints.add(next); }
         }
         const label = packHint
           ? (ownerHint
@@ -1079,6 +1077,35 @@ function renderGanadores() {
     }
     el.innerHTML = html;
   });
+
+  // Premios consuelo: automáticos, solo lectura
+  const ce = document.getElementById('ganaList-consuelo');
+  const cq = QTYS.consuelo;
+  if (cq === 0) { ce.innerHTML = '<div class="no-prizes">Sin premios configurados</div>'; }
+  else {
+    let ch = '';
+    for (let i = 0; i < cq; i++) {
+      const k = prevConsuelo[i];
+      if (k) {
+        const owner = getOwnerName(k);
+        ch += `<div class="ganador-row consuelo-col">
+          <span class="ganador-num">#${i+1}</span>
+          <span class="ganador-name">${owner ? escHtml(owner) : '<em style="color:var(--muted)">sin nombre</em>'}</span>
+          <span class="ganador-pack">${escHtml(k)}</span>
+        </div>`;
+      } else {
+        ch += `<div class="slot-empty" style="cursor:default"><span class="slot-num">#${i+1}</span><span>Esperando cartón lleno sin premio…</span></div>`;
+      }
+    }
+    ce.innerHTML = ch;
+  }
+}
+
+function refreshOwnerViews() {
+  renderPrizeListWithOwner('terna', prevPrizes.terna, 'listTerna');
+  renderPrizeListWithOwner('quintina', prevPrizes.quintina, 'listQuintina');
+  renderPrizeListWithOwner('lleno', prevPrizes.lleno, 'listLleno');
+  renderGanadores();
 }
 
 // recalc already calls renderPrizeListWithOwner and renderGanadores internally
