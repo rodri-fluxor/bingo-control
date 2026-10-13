@@ -326,6 +326,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       <div class="entry-hint" id="entryHint">Escribí el número y presioná Enter</div>
     </div>
     <button class="btn btn-primary" id="btnAgregar" onclick="registrarBolilla()">✚ Agregar bolilla</button>
+    <button class="btn" id="btnRetroceder" onclick="retrocederBolilla()" style="background:var(--panel2);border:1px solid var(--border);color:var(--muted);font-family:'Nunito',sans-serif;font-weight:800;font-size:0.85rem;padding:10px;border-radius:8px;cursor:pointer;transition:all .15s" title="Deshacer la última bolilla ingresada">↩ Retroceder</button>
     <button class="btn btn-danger" id="btnReset" onclick="resetear()">⟳ Reiniciar partida</button>
 
     <div class="panel-title" style="margin-top:4px">📋 Historial</div>
@@ -440,6 +441,23 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       <div class="pack-names-actions">
         <button class="btn-sm" onclick="clearAllPackNames()">Limpiar todo</button>
         <button class="btn-sm" onclick="exportPackNames()">Copiar lista</button>
+        <button class="btn-sm" onclick="showImportModal()" style="border-color:var(--accent);color:var(--accent)">📋 Pegar lista</button>
+      </div>
+      <!-- Import modal -->
+      <div id="importModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:flex;align-items:center;justify-content:center;display:none">
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(480px,95vw);display:flex;flex-direction:column;gap:12px">
+          <div style="font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem">📋 Importar lista de nombres</div>
+          <div style="font-size:0.75rem;color:var(--muted);line-height:1.5">
+            Pegá una lista con un nombre por línea. El orden define el pack (línea 1 → Pack 1, línea 2 → Pack 2, etc.).<br>
+            También se reconoce el formato <code style="background:var(--bg);padding:1px 4px;border-radius:3px">P001 — Nombre</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">1. Nombre</code>.
+          </div>
+          <textarea id="importTextarea" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.82rem;padding:10px;min-height:160px;resize:vertical;outline:none" placeholder="Juan Pérez&#10;María García&#10;Carlos López&#10;..."></textarea>
+          <div id="importPreview" style="font-size:0.72rem;color:var(--muted)"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn-sm" onclick="closeImportModal()">Cancelar</button>
+            <button class="btn-sm" onclick="doImportNames()" style="background:var(--accent);color:#000;border-color:var(--accent);font-weight:800">Importar</button>
+          </div>
+        </div>
       </div>
       <div class="pack-names-grid" id="packNamesGrid"></div>
     </div>
@@ -525,6 +543,7 @@ function registrarBolilla() {
     return;
   }
   bolillas.add(val);
+  bolillasHistory.push(val);
   lastBall = val;
   entryInput.value = '';
   entryInput.focus();
@@ -562,6 +581,79 @@ function flashError(msg) {
     entryInput.focus();
   }, 800);
 }
+
+// === RETROCEDER BOLILLA ===
+let bolillasHistory = []; // ordered array to support undo
+
+function retrocederBolilla() {
+  if (bolillasHistory.length === 0) {
+    document.getElementById('entryHint').textContent = '⚠ No hay bolillas para retroceder';
+    setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
+    return;
+  }
+  const last = bolillasHistory.pop();
+  bolillas.delete(last);
+
+  // Unmark ball in grid
+  const ballEl = document.getElementById('ball-' + last);
+  if (ballEl) ballEl.classList.remove('marked', 'new-mark');
+
+  // Remove from historial UI (first child = last added)
+  const hist = document.getElementById('historial');
+  if (hist.firstChild) hist.removeChild(hist.firstChild);
+
+  // Reset prevPrizes completely and recalculate from scratch
+  prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+
+  document.getElementById('bolillasCount').textContent = bolillas.size;
+  document.getElementById('entryHint').textContent = '↩ Bolilla ' + last + ' eliminada';
+  setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
+
+  recalc();
+  entryInput.focus();
+}
+
+// === IMPORT PACK NAMES ===
+function showImportModal() {
+  document.getElementById('importTextarea').value = '';
+  document.getElementById('importPreview').textContent = '';
+  document.getElementById('importModal').style.display = 'flex';
+  setTimeout(() => document.getElementById('importTextarea').focus(), 50);
+}
+
+function closeImportModal() {
+  document.getElementById('importModal').style.display = 'none';
+}
+
+function doImportNames() {
+  const raw = document.getElementById('importTextarea').value;
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  let imported = 0;
+  lines.forEach((line, idx) => {
+    // Try formats: "P001 — Name", "P001 - Name", "1. Name", "1 Name", or just "Name"
+    let packNum = null;
+    let name = line;
+    const m1 = line.match(/^P?0*(\d+)\s*[—\-\.]\s*(.+)/i);
+    const m2 = line.match(/^(\d+)\s+(.+)/);
+    if (m1) { packNum = parseInt(m1[1]); name = m1[2].trim(); }
+    else if (m2 && parseInt(m2[1]) >= 1 && parseInt(m2[1]) <= 100) { packNum = parseInt(m2[1]); name = m2[2].trim(); }
+    else { packNum = idx + 1; name = line.trim(); }
+
+    if (packNum >= 1 && packNum <= 100 && name) {
+      PACK_NAMES[packNum] = name;
+      const inp = document.getElementById('pn-' + packNum);
+      if (inp) { inp.value = name; inp.classList.add('has-name'); }
+      imported++;
+    }
+  });
+  document.getElementById('importPreview').textContent = '✓ ' + imported + ' nombres importados.';
+  setTimeout(() => closeImportModal(), 800);
+}
+
+document.getElementById('importTextarea').addEventListener('input', function() {
+  const lines = this.value.split('\n').filter(l => l.trim());
+  document.getElementById('importPreview').textContent = lines.length ? lines.length + ' líneas detectadas' : '';
+});
 
 // === PRIZE DETECTION ===
 function checkCard(card) {
@@ -702,6 +794,7 @@ function showToast(type, title, msg) {
 function resetear() {
   if (!confirm('¿Reiniciar la partida? Se borrarán todas las bolillas.')) return;
   bolillas.clear();
+  bolillasHistory = [];
   lastBall = null;
   prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
   document.getElementById('historial').innerHTML = '';
