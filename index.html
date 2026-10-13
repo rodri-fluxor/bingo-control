@@ -418,7 +418,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       </div>
       <div class="ganadores-section">
         <div class="ganadores-cat-title" style="color:#38BDF8">🎗️ Premios Consuelo</div>
-        <div style="font-size:0.7rem;color:var(--muted)">Se llenan solos: cartones llenos que no ganaron terna, quintina ni cartón lleno.</div>
+        <div style="font-size:0.7rem;color:var(--muted)">Se llenan solos: cartones llenos de packs que no ganaron terna, quintina ni cartón lleno (el pack entero queda anulado).</div>
         <div class="ganadores-list" id="ganaList-consuelo"></div>
       </div>
     </div>
@@ -835,9 +835,12 @@ function recalc() {
   let cons = [];
   if (frozenConsuelo) cons = frozenConsuelo.slice();
   else if (pi >= 3) {
-    const won = new Set([...shown.terna, ...shown.quintina, ...shown.lleno]);
-    ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack) won.add(w.pack); }));
-    cons = pickCap(seq.lleno.filter(it => !won.has(it.key)), QTYS.consuelo || 0);
+    // Un pack pertenece a un único titular: si algún cartón del pack ganó, TODO el pack queda anulado
+    const packOf = k => { const m = String(k).match(/P\d+/); return m ? m[0] : null; };
+    const wonPacks = new Set();
+    [...shown.terna, ...shown.quintina, ...shown.lleno].forEach(k => wonPacks.add(packOf(k)));
+    ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack && packOf(w.pack)) wonPacks.add(packOf(w.pack)); }));
+    cons = pickCap(seq.lleno.filter(it => !wonPacks.has(packOf(it.key))), QTYS.consuelo || 0);
   }
 
   // 4) Avisos de lo nuevo
