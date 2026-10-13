@@ -216,6 +216,12 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 .phase-info .ok { color: var(--accent); font-weight: 700; }
 .phase-next { width: auto !important; padding: 9px 18px !important; white-space: nowrap; }
 .phase-next:disabled { opacity: 0.4; cursor: not-allowed; }
+.prize-tag { display: flex; align-items: center; gap: 6px; }
+.prize-tag .tag-del { margin-left: auto; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; width: 22px; height: 22px; line-height: 1; font-size: 0.7rem; cursor: pointer; flex-shrink: 0; }
+.prize-tag .tag-del:hover { color: var(--red); border-color: var(--red); }
+.removed-note { margin-top: 6px; font-size: 0.68rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.removed-note .rm-chip { background: var(--bg); border: 1px dashed var(--border); border-radius: 12px; padding: 2px 4px 2px 8px; display: inline-flex; gap: 4px; align-items: center; }
+.removed-note .rm-chip button { background: transparent; border: none; color: var(--accent); cursor: pointer; font-size: 0.8rem; padding: 0 3px; }
 .phase-chip { width: 100%; font-size: 0.62rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; padding: 2px 0; }
 .tab-content { display: none; flex-direction: column; gap: 10px; }
 .tab-content.active { display: flex; }
@@ -548,6 +554,7 @@ let seqKeys = { terna: new Set(), quintina: new Set(), lleno: new Set() };
 let round = 0;              // cada recalculo = una ronda (para empates)
 let frozen = { terna: null, quintina: null, lleno: null }; // lista fijada al salir de la fase
 let frozenConsuelo = null;
+let removed = { terna: new Set(), quintina: new Set(), lleno: new Set() }; // ganadores eliminados a mano (pueden ir a consuelo)
 
 // === INIT ===
 function initBolillero() {
@@ -638,6 +645,8 @@ function renderHistorial() {
     const ev = events[i];
     const d = document.createElement('div');
     if (ev.k === 'b') { d.className = 'mini-ball'; d.textContent = ev.n; }
+    else if (ev.k === 'x') { d.className = 'phase-chip'; d.style.color = 'var(--red)'; d.textContent = '✕ ' + ev.key + ' fuera de ' + PHASE_LABEL[ev.t]; }
+    else if (ev.k === 'r') { d.className = 'phase-chip'; d.textContent = '↺ ' + ev.key + ' restituido en ' + PHASE_LABEL[ev.t]; }
     else { d.className = 'phase-chip'; d.textContent = '→ ' + PHASE_LABEL[ev.to]; }
     hist.appendChild(d);
   }
@@ -662,6 +671,27 @@ function avanzarFase() {
   entryInput.focus();
 }
 
+function quitarGanador(type, key) {
+  const owner = getOwnerName(key);
+  const name = key + (owner ? ' — ' + owner : '');
+  const lbl = { terna: 'las Ternas', quintina: 'las Quintinas' }[type];
+  if (!confirm('¿Eliminar a ' + name + ' de ' + lbl + '?\n\nDeja de ser ganador y su pack puede participar por consuelo. Si había otro cartón esperando, ocupa su lugar.')) return;
+  // si estaba registrado a mano en Ganadores, se quita también (Retroceder lo restituye)
+  const manual = [];
+  (WINNERS[type] || []).forEach((w, i) => { if (w && w.pack === key) { manual.push({ type, slot: i, w }); WINNERS[type][i] = null; } });
+  events.push({ k: 'x', t: type, key, manual });
+  removed[type].add(key);
+  recalc();
+  renderHistorial();
+}
+
+function restaurarGanador(type, key) {
+  events.push({ k: 'r', t: type, key });
+  removed[type].delete(key);
+  recalc();
+  renderHistorial();
+}
+
 function retrocederBolilla() {
   if (events.length === 0) {
     document.getElementById('entryHint').textContent = '⚠ No hay nada para retroceder';
@@ -669,9 +699,12 @@ function retrocederBolilla() {
     return;
   }
   const last = events.pop();
+  if (last.k === 'x' && last.manual) last.manual.forEach(m => { WINNERS[m.type][m.slot] = m.w; });
   rebuildFromHistory();
   document.getElementById('entryHint').textContent = last.k === 'b'
     ? '↩ Bolilla ' + last.n + ' eliminada'
+    : last.k === 'x' ? '↩ ' + last.key + ' vuelve a ' + PHASE_LABEL[last.t]
+    : last.k === 'r' ? '↩ ' + last.key + ' vuelve a estar eliminado'
     : '↩ Volvimos a la fase ' + PHASE_LABEL[phase];
   setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1800);
   entryInput.focus();
@@ -683,6 +716,7 @@ function resetDerived() {
   round = 0;
   frozen = { terna: null, quintina: null, lleno: null };
   frozenConsuelo = null;
+  removed = { terna: new Set(), quintina: new Set(), lleno: new Set() };
   prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
   prevConsuelo = [];
   phase = 'terna';
@@ -696,6 +730,8 @@ function rebuildFromHistory() {
     resetDerived();
     for (const ev of events) {
       if (ev.k === 'b') { bolillas.add(ev.n); recalc(); }
+      else if (ev.k === 'x') { removed[ev.t].add(ev.key); recalc(); }
+      else if (ev.k === 'r') { removed[ev.t].delete(ev.key); recalc(); }
       else applyPhase(ev.to);
     }
     if (!events.length) recalc();
@@ -826,8 +862,9 @@ function recalc() {
   const pi = PHASES.indexOf(phase);
   const shown = {};
   ['terna','quintina','lleno'].forEach((t, idx) => {
-    if (frozen[t]) shown[t] = frozen[t].slice();
-    else if (pi >= idx) shown[t] = pickCap(seq[t], QTYS[t] || 0);
+    const rm = removed[t];
+    if (frozen[t]) shown[t] = frozen[t].filter(k => !rm.has(k));
+    else if (pi >= idx) shown[t] = pickCap(seq[t].filter(it => !rm.has(it.key)), QTYS[t] || 0);
     else shown[t] = [];
   });
 
@@ -1080,15 +1117,23 @@ function getOwnerName(packKey) {
 function renderPrizeListWithOwner(type, prizes, elId, emptyText) {
   const el = document.getElementById(elId);
   if (!el) return;
+  const canRemove = (type === 'terna' || type === 'quintina');
+  let html = '';
   if (!prizes || prizes.size === 0) {
-    el.innerHTML = '<div class="no-prizes">' + (emptyText || 'Aún no') + '</div>';
-    return;
+    html = '<div class="no-prizes">' + (emptyText || 'Aún no') + '</div>';
+  } else {
+    html = [...prizes].map(k => {
+      const owner = getOwnerName(k);
+      const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
+      const del = canRemove ? `<button class="tag-del" title="Eliminar ganador (su pack puede participar por consuelo)" onclick="quitarGanador('${type}','${k}')">✕</button>` : '';
+      return `<div class="prize-tag"><span>${k}${ownerSpan}</span>${del}</div>`;
+    }).join('');
   }
-  el.innerHTML = [...prizes].map(k => {
-    const owner = getOwnerName(k);
-    const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
-    return `<div class="prize-tag">${k}${ownerSpan}</div>`;
-  }).join('');
+  if (canRemove && removed[type] && removed[type].size) {
+    html += '<div class="removed-note">Eliminados: ' + [...removed[type]].map(k =>
+      `<span class="rm-chip">${k}<button title="Restituir como ganador" onclick="restaurarGanador('${type}','${k}')">↺</button></span>`).join('') + '</div>';
+  }
+  el.innerHTML = html;
 }
 
 // ===== PATCH abrirModal to auto-fill owner name =====
