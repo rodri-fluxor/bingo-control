@@ -659,10 +659,17 @@ function recalc() {
   document.getElementById('statQuintina').textContent = cappedPrizes.quintina.size;
   document.getElementById('statLleno').textContent = cappedPrizes.lleno.size;
 
-  // Update prize lists
-  renderPrizeList('listTerna', cappedPrizes.terna);
-  renderPrizeList('listQuintina', cappedPrizes.quintina);
-  renderPrizeList('listLleno', cappedPrizes.lleno);
+  // Update prize lists with owner names
+  if (typeof renderPrizeListWithOwner === 'function') {
+    renderPrizeListWithOwner('terna', cappedPrizes.terna, 'listTerna');
+    renderPrizeListWithOwner('quintina', cappedPrizes.quintina, 'listQuintina');
+    renderPrizeListWithOwner('lleno', cappedPrizes.lleno, 'listLleno');
+  } else {
+    renderPrizeList('listTerna', cappedPrizes.terna);
+    renderPrizeList('listQuintina', cappedPrizes.quintina);
+    renderPrizeList('listLleno', cappedPrizes.lleno);
+  }
+  if (typeof renderGanadores === 'function') renderGanadores();
 }
 
 function renderPrizeList(id, prizeSet) {
@@ -981,15 +988,7 @@ function renderGanadores() {
   });
 }
 
-// After recalc (which already uses cappedPrizes), re-render with owner name annotations
-const _origRecalc = recalc;
-function recalc() {
-  _origRecalc();
-  renderPrizeListWithOwner('terna', prevPrizes.terna, 'listTerna');
-  renderPrizeListWithOwner('quintina', prevPrizes.quintina, 'listQuintina');
-  renderPrizeListWithOwner('lleno', prevPrizes.lleno, 'listLleno');
-  renderGanadores();
-}
+// recalc already calls renderPrizeListWithOwner and renderGanadores internally
 
 // Init pack names grid on load
 initPackNamesGrid();
