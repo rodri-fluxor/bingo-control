@@ -205,6 +205,18 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
 }
 .tab.active { background: var(--panel); color: var(--text); }
 
+/* ===== FASES ===== */
+.phase-bar { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.phase-steps { display: flex; gap: 6px; flex-wrap: wrap; }
+.phase-step { padding: 5px 12px; border-radius: 20px; font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 0.78rem; border: 1px solid var(--border); color: var(--muted); background: var(--panel2); }
+.phase-step.active { color: #0F1B35; background: var(--yellow); border-color: var(--yellow); }
+.phase-step.done { color: var(--accent); border-color: var(--accent); }
+.phase-info { font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 180px; }
+.phase-info b { color: var(--text); }
+.phase-info .ok { color: var(--accent); font-weight: 700; }
+.phase-next { width: auto !important; padding: 9px 18px !important; white-space: nowrap; }
+.phase-next:disabled { opacity: 0.4; cursor: not-allowed; }
+.phase-chip { width: 100%; font-size: 0.62rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; padding: 2px 0; }
 .tab-content { display: none; flex-direction: column; gap: 10px; }
 .tab-content.active { display: flex; }
 
@@ -318,6 +330,12 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
   <input type="number" id="packHasta" min="1" max="100" value="50">
   <span style="flex:1"></span>
   <label>Bolillas salidas: <strong id="bolillasCount" style="color:var(--yellow);font-variant-numeric:tabular-nums">0</strong> / 90</label>
+</div>
+
+<div class="phase-bar" id="phaseBar">
+  <div class="phase-steps" id="phaseSteps"></div>
+  <div class="phase-info" id="phaseInfo"></div>
+  <button class="btn btn-primary phase-next" id="btnFase" onclick="avanzarFase()"></button>
 </div>
 
 <div class="main">
@@ -519,6 +537,18 @@ let prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
 let prevConsuelo = []; // cartones llenos sin premio previo, en orden de aparición
 let quietMode = false; // true mientras se recalcula el historial (sin avisos)
 
+// === FASES DEL JUEGO ===
+const PHASES = ['terna','quintina','lleno','consuelo','fin'];
+const PHASE_LABEL = { terna:'🔥 Terna', quintina:'⚡ Quintina', lleno:'🌟 Cartón Lleno', consuelo:'🎗️ Consuelo', fin:'🏁 Fin' };
+const NEXT_LABEL = { terna:'Pasar a Quintinas →', quintina:'Pasar a Cartón Lleno →', lleno:'Pasar a Consuelos →', consuelo:'🏁 Finalizar juego', fin:'Juego finalizado' };
+let phase = 'terna';
+let events = [];            // historial ordenado: {k:'b', n} bolilla | {k:'p', to} cambio de fase
+let seq = { terna: [], quintina: [], lleno: [] };           // cartones en orden cronológico de aparición
+let seqKeys = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+let round = 0;              // cada recalculo = una ronda (para empates)
+let frozen = { terna: null, quintina: null, lleno: null }; // lista fijada al salir de la fase
+let frozenConsuelo = null;
+
 // === INIT ===
 function initBolillero() {
   const el = document.getElementById('bolillero');
@@ -557,6 +587,7 @@ entryInput.addEventListener('keydown', e => {
 entryInput.focus();
 
 function registrarBolilla() {
+  if (phase === 'fin') { flashError('El juego ya terminó'); return; }
   const val = parseInt(entryInput.value);
   if (isNaN(val) || val < 1 || val > 90) {
     flashError('Número inválido (1–90)');
@@ -567,7 +598,7 @@ function registrarBolilla() {
     return;
   }
   bolillas.add(val);
-  bolillasHistory.push(val);
+  events.push({ k: 'b', n: val });
   lastBall = val;
   entryInput.value = '';
   entryInput.focus();
@@ -579,15 +610,8 @@ function registrarBolilla() {
     setTimeout(() => ballEl.classList.remove('new-mark'), 400);
   }
 
-  // Update counter
   document.getElementById('bolillasCount').textContent = bolillas.size;
-
-  // Add to history
-  const hist = document.getElementById('historial');
-  const mb = document.createElement('div');
-  mb.className = 'mini-ball';
-  mb.textContent = val;
-  hist.insertBefore(mb, hist.firstChild);
+  renderHistorial();
 
   document.getElementById('entryHint').textContent = '✓ Bolilla ' + val + ' registrada';
   setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
@@ -606,46 +630,85 @@ function flashError(msg) {
   }, 800);
 }
 
-// === RETROCEDER BOLILLA ===
-let bolillasHistory = []; // ordered array to support undo
-
-function retrocederBolilla() {
-  if (bolillasHistory.length === 0) {
-    document.getElementById('entryHint').textContent = '⚠ No hay bolillas para retroceder';
-    setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
-    return;
-  }
-  const last = bolillasHistory.pop();
-  bolillas.delete(last);
-
-  // Unmark ball in grid
-  const ballEl = document.getElementById('ball-' + last);
-  if (ballEl) ballEl.classList.remove('marked', 'new-mark');
-
-  // Remove from historial UI (first child = last added)
+// === HISTORIAL, FASES Y RETROCEDER ===
+function renderHistorial() {
   const hist = document.getElementById('historial');
-  if (hist.firstChild) hist.removeChild(hist.firstChild);
+  hist.innerHTML = '';
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    const d = document.createElement('div');
+    if (ev.k === 'b') { d.className = 'mini-ball'; d.textContent = ev.n; }
+    else { d.className = 'phase-chip'; d.textContent = '→ ' + PHASE_LABEL[ev.to]; }
+    hist.appendChild(d);
+  }
+}
 
-  document.getElementById('entryHint').textContent = '↩ Bolilla ' + last + ' eliminada';
-  setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
+function applyPhase(to) {
+  // Al salir de una fase se congela su lista: lo que pase después ya no se registra en ella
+  if (phase === 'terna' || phase === 'quintina' || phase === 'lleno') frozen[phase] = [...prevPrizes[phase]];
+  else if (phase === 'consuelo') frozenConsuelo = [...prevConsuelo];
+  phase = to;
+  recalc();
+}
 
-  // Recalcula en orden desde la primera bolilla (sin avisos) para respetar topes y empates
-  rebuildFromHistory();
+function avanzarFase() {
+  const i = PHASES.indexOf(phase);
+  if (i >= PHASES.length - 1) return;
+  const to = PHASES[i + 1];
+  if (to === 'fin' && !confirm('¿Finalizar el juego? Ya no se podrán ingresar bolillas (podés deshacerlo con Retroceder).')) return;
+  events.push({ k: 'p', to });
+  applyPhase(to);
+  renderHistorial();
   entryInput.focus();
 }
 
+function retrocederBolilla() {
+  if (events.length === 0) {
+    document.getElementById('entryHint').textContent = '⚠ No hay nada para retroceder';
+    setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1500);
+    return;
+  }
+  const last = events.pop();
+  rebuildFromHistory();
+  document.getElementById('entryHint').textContent = last.k === 'b'
+    ? '↩ Bolilla ' + last.n + ' eliminada'
+    : '↩ Volvimos a la fase ' + PHASE_LABEL[phase];
+  setTimeout(() => { document.getElementById('entryHint').textContent = 'Escribí el número y presioná Enter'; }, 1800);
+  entryInput.focus();
+}
+
+function resetDerived() {
+  seq = { terna: [], quintina: [], lleno: [] };
+  seqKeys = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+  round = 0;
+  frozen = { terna: null, quintina: null, lleno: null };
+  frozenConsuelo = null;
+  prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+  prevConsuelo = [];
+  phase = 'terna';
+  bolillas = new Set();
+}
+
+// Recalcula todo en orden desde la primera acción (sin avisos): respeta fases, topes y empates
 function rebuildFromHistory() {
   quietMode = true;
   try {
-    bolillas = new Set();
-    prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
-    prevConsuelo = [];
-    for (const n of bolillasHistory) { bolillas.add(n); recalc(); }
-    if (!bolillasHistory.length) recalc();
+    resetDerived();
+    for (const ev of events) {
+      if (ev.k === 'b') { bolillas.add(ev.n); recalc(); }
+      else applyPhase(ev.to);
+    }
+    if (!events.length) recalc();
   } finally {
     quietMode = false;
   }
+  lastBall = null;
+  for (const ev of events) if (ev.k === 'b') lastBall = ev.n;
+  document.querySelectorAll('.ball').forEach(b => b.classList.remove('marked', 'new-mark'));
+  bolillas.forEach(n => { const el = document.getElementById('ball-' + n); if (el) el.classList.add('marked'); });
   document.getElementById('bolillasCount').textContent = bolillas.size;
+  renderHistorial();
+  renderAllViews();
 }
 
 // === IMPORT PACK NAMES ===
@@ -724,98 +787,106 @@ function checkCard(card) {
   return { terna, quintina, lleno };
 }
 
+// Toma los primeros `cap` de la lista cronológica; si varios llegan en la misma bolilla que el último, entran todos (empate)
+function pickCap(list, cap) {
+  if (!cap || cap <= 0) return [];
+  const out = [];
+  let lastRound = -1;
+  for (const it of list) {
+    if (out.length >= cap && it.round !== lastRound) break;
+    out.push(it.key);
+    lastRound = it.round;
+  }
+  return out;
+}
+
 function recalc() {
   const r = getRange();
-  // Build ALL detected prizes (no cap yet)
-  const newPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
+  round++;
 
+  // 1) Registrar en orden cronológico qué cartones alcanzan cada nivel (siempre, en cualquier fase)
+  const cur = { terna: [], quintina: [], lleno: [] };
   for (let p = r.desde - 1; p <= r.hasta - 1; p++) {
     const packCards = PACKS[p];
     for (let c = 0; c < 3; c++) {
       const key = `P${(p+1).toString().padStart(3,'0')}-C${c+1}`;
       const result = checkCard(packCards[c]);
-      if (result.lleno) { newPrizes.lleno.add(key); newPrizes.quintina.add(key); newPrizes.terna.add(key); }
-      else if (result.quintina) { newPrizes.quintina.add(key); newPrizes.terna.add(key); }
-      else if (result.terna) { newPrizes.terna.add(key); }
+      if (result.lleno) { cur.lleno.push(key); cur.quintina.push(key); cur.terna.push(key); }
+      else if (result.quintina) { cur.quintina.push(key); cur.terna.push(key); }
+      else if (result.terna) { cur.terna.push(key); }
     }
   }
-
-  // --- Cap logic: respect QTYS limit, but include ties from same bolilla ---
-  // A "tie" = multiple new detections happening in the same recalc call.
-  // If cap=4 and 3 are already in, and 2 arrive at once → include both (total 5 shown).
-  // On the NEXT bolilla, cap is already reached so nothing new is added.
-  const cappedPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
-  ['lleno','quintina','terna'].forEach(type => {
-    const cap = (typeof QTYS !== 'undefined') ? (QTYS[type] || 0) : 999;
-    // Keep everything already tracked (was within cap from previous bolillas)
-    for (const k of prevPrizes[type]) cappedPrizes[type].add(k);
-    if (cap === 0 || cappedPrizes[type].size >= cap) return; // cap reached, ignore new ones
-    // Find NEW ones this bolilla
-    const newThisRound = [...newPrizes[type]].filter(k => !prevPrizes[type].has(k));
-    if (newThisRound.length === 0) return;
-    // Add ALL ties from this round (even if total exceeds cap)
-    for (const k of newThisRound) cappedPrizes[type].add(k);
+  ['terna','quintina','lleno'].forEach(t => {
+    for (const key of cur[t]) {
+      if (!seqKeys[t].has(key)) { seqKeys[t].add(key); seq[t].push({ key, round }); }
+    }
   });
 
-  // --- Premios consuelo: cartones llenos que NO ganaron terna/quintina/lleno ---
-  const wonSet = new Set([...cappedPrizes.terna, ...cappedPrizes.quintina, ...cappedPrizes.lleno]);
-  ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack) wonSet.add(w.pack); }));
-  const cappedConsuelo = [...prevConsuelo];
-  const consCap = QTYS.consuelo || 0;
-  if (consCap > 0 && cappedConsuelo.length < consCap) {
-    const fresh = [...newPrizes.lleno].filter(k => !wonSet.has(k) && !cappedConsuelo.includes(k)).sort();
-    fresh.forEach(k => cappedConsuelo.push(k));
-  }
-  for (const key of cappedConsuelo) {
-    if (!prevConsuelo.includes(key)) {
-      const owner = getOwnerName(key);
-      showToast('consuelo', '🎗️ ¡PREMIO CONSUELO!', key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : ''));
-    }
-  }
-  prevConsuelo = cappedConsuelo;
+  // 2) Qué se muestra según la fase: fases ya cerradas = lista congelada; fase actual = primeros N; fases futuras = vacío
+  const pi = PHASES.indexOf(phase);
+  const shown = {};
+  ['terna','quintina','lleno'].forEach((t, idx) => {
+    if (frozen[t]) shown[t] = frozen[t].slice();
+    else if (pi >= idx) shown[t] = pickCap(seq[t], QTYS[t] || 0);
+    else shown[t] = [];
+  });
 
-  // Notify NEW prizes (only those just added to cappedPrizes)
-  for (const key of cappedPrizes.lleno) {
-    if (!prevPrizes.lleno.has(key)) {
-      const owner = (typeof getOwnerName === 'function') ? getOwnerName(key) : '';
-      const label = key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : '');
-      showToast('lleno', '🌟 ¡CARTÓN LLENO!', label);
-    }
-  }
-  for (const key of cappedPrizes.quintina) {
-    if (!prevPrizes.quintina.has(key) && !cappedPrizes.lleno.has(key)) {
-      const owner = (typeof getOwnerName === 'function') ? getOwnerName(key) : '';
-      const label = key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : '');
-      showToast('quintina', '⚡ ¡QUINTINA!', label);
-    }
-  }
-  for (const key of cappedPrizes.terna) {
-    if (!prevPrizes.terna.has(key) && !cappedPrizes.quintina.has(key)) {
-      const owner = (typeof getOwnerName === 'function') ? getOwnerName(key) : '';
-      const label = key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : '');
-      showToast('terna', '🔥 ¡TERNA!', label);
-    }
+  // 3) Consuelo: cartones llenos (orden de aparición) que no ganaron terna, quintina ni cartón lleno
+  let cons = [];
+  if (frozenConsuelo) cons = frozenConsuelo.slice();
+  else if (pi >= 3) {
+    const won = new Set([...shown.terna, ...shown.quintina, ...shown.lleno]);
+    ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack) won.add(w.pack); }));
+    cons = pickCap(seq.lleno.filter(it => !won.has(it.key)), QTYS.consuelo || 0);
   }
 
-  prevPrizes = cappedPrizes;
+  // 4) Avisos de lo nuevo
+  const titles = { terna: '🔥 ¡TERNA!', quintina: '⚡ ¡QUINTINA!', lleno: '🌟 ¡CARTÓN LLENO!', consuelo: '🎗️ ¡PREMIO CONSUELO!' };
+  const announce = (type, key) => {
+    const owner = (typeof getOwnerName === 'function') ? getOwnerName(key) : '';
+    showToast(type, titles[type], key.split('-')[0] + ' ' + key.split('-')[1] + (owner ? ' — ' + owner : ''));
+  };
+  ['terna','quintina','lleno'].forEach(t => shown[t].forEach(k => { if (!prevPrizes[t].has(k)) announce(t, k); }));
+  cons.forEach(k => { if (!prevConsuelo.includes(k)) announce('consuelo', k); });
 
-  // Update stats (show capped count)
-  document.getElementById('statTerna').textContent = cappedPrizes.terna.size;
-  document.getElementById('statQuintina').textContent = cappedPrizes.quintina.size;
-  document.getElementById('statLleno').textContent = cappedPrizes.lleno.size;
+  prevPrizes = { terna: new Set(shown.terna), quintina: new Set(shown.quintina), lleno: new Set(shown.lleno) };
+  prevConsuelo = cons;
 
-  // Update prize lists with owner names
-  if (typeof renderPrizeListWithOwner === 'function') {
-    renderPrizeListWithOwner('terna', cappedPrizes.terna, 'listTerna');
-    renderPrizeListWithOwner('quintina', cappedPrizes.quintina, 'listQuintina');
-    renderPrizeListWithOwner('lleno', cappedPrizes.lleno, 'listLleno');
-  } else {
-    renderPrizeList('listTerna', cappedPrizes.terna);
-    renderPrizeList('listQuintina', cappedPrizes.quintina);
-    renderPrizeList('listLleno', cappedPrizes.lleno);
-  }
+  if (!quietMode) renderAllViews();
+}
+
+function renderAllViews() {
+  const pi = PHASES.indexOf(phase);
+  const ids = { terna: 'listTerna', quintina: 'listQuintina', lleno: 'listLleno' };
+  ['terna','quintina','lleno'].forEach((t, idx) => {
+    renderPrizeListWithOwner(t, prevPrizes[t], ids[t], pi < idx ? 'Esperando su fase…' : 'Aún no');
+  });
+  document.getElementById('statTerna').textContent = prevPrizes.terna.size + '/' + QTYS.terna;
+  document.getElementById('statQuintina').textContent = prevPrizes.quintina.size + '/' + QTYS.quintina;
+  document.getElementById('statLleno').textContent = prevPrizes.lleno.size + '/' + QTYS.lleno;
   renderConsueloDetectados();
-  if (typeof renderGanadores === 'function') renderGanadores();
+  renderGanadores();
+  renderPhaseBar();
+}
+
+function renderPhaseBar() {
+  const pi = PHASES.indexOf(phase);
+  document.getElementById('phaseSteps').innerHTML = PHASES.map((p, i) =>
+    `<span class="phase-step ${i < pi ? 'done' : i === pi ? 'active' : ''}">${i < pi ? '✓ ' : ''}${PHASE_LABEL[p]}</span>`).join('');
+  let info;
+  if (phase === 'fin') {
+    info = '<b>Juego finalizado.</b> Si te equivocaste, usá ↩ Retroceder.';
+  } else {
+    const n = phase === 'consuelo' ? prevConsuelo.length : prevPrizes[phase].size;
+    const cap = QTYS[phase] || 0;
+    info = `<b>${PHASE_LABEL[phase]}</b>: ${n}/${cap} registrados` + (cap > 0 && n >= cap ? ' — <span class="ok">✓ completo, podés pasar a la siguiente fase</span>' : '');
+  }
+  document.getElementById('phaseInfo').innerHTML = info;
+  const btn = document.getElementById('btnFase');
+  btn.textContent = NEXT_LABEL[phase];
+  btn.disabled = (phase === 'fin');
+  entryInput.disabled = (phase === 'fin');
+  document.getElementById('btnAgregar').disabled = (phase === 'fin');
 }
 
 function renderPrizeList(id, prizeSet) {
@@ -857,16 +928,9 @@ function nextToast() {
 
 // === RESET ===
 function resetear() {
-  if (!confirm('¿Reiniciar la partida? Se borrarán todas las bolillas.')) return;
-  bolillas.clear();
-  bolillasHistory = [];
-  lastBall = null;
-  prevConsuelo = [];
-  prevPrizes = { terna: new Set(), quintina: new Set(), lleno: new Set() };
-  document.getElementById('historial').innerHTML = '';
-  document.getElementById('bolillasCount').textContent = '0';
-  document.querySelectorAll('.ball.marked').forEach(b => b.classList.remove('marked'));
-  recalc();
+  if (!confirm('¿Reiniciar la partida? Se borrarán todas las bolillas y se vuelve a la fase Terna.')) return;
+  events = [];
+  rebuildFromHistory();
   entryInput.value = '';
   entryInput.focus();
 }
@@ -1010,15 +1074,14 @@ function getOwnerName(packKey) {
 // ===== PATCH renderPrizeList to show owner name =====
 // Override after original definition
 
-function renderPrizeListWithOwner(type, prizes, elId) {
+function renderPrizeListWithOwner(type, prizes, elId, emptyText) {
   const el = document.getElementById(elId);
   if (!el) return;
   if (!prizes || prizes.size === 0) {
-    el.innerHTML = '<div class="no-prizes">Aún no</div>';
+    el.innerHTML = '<div class="no-prizes">' + (emptyText || 'Aún no') + '</div>';
     return;
   }
-  const sorted = [...prizes].sort();
-  el.innerHTML = sorted.map(k => {
+  el.innerHTML = [...prizes].map(k => {
     const owner = getOwnerName(k);
     const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
     return `<div class="prize-tag">${k}${ownerSpan}</div>`;
@@ -1055,8 +1118,9 @@ function renderGanadores() {
     const qty = QTYS[type];
     if (qty === 0) { el.innerHTML = '<div class="no-prizes">Sin premios configurados</div>'; return; }
     let html = '';
+    const total = Math.max(qty, type === 'sorpresa' ? 0 : prevPrizes[type].size, (WINNERS[type]||[]).length);
     const usedHints = new Set((WINNERS[type]||[]).filter(Boolean).map(w=>w.pack));
-    for (let i = 0; i < qty; i++) {
+    for (let i = 0; i < total; i++) {
       const w = WINNERS[type] && WINNERS[type][i];
       if (w) {
         html += `<div class="ganador-row ${type}-col">
@@ -1092,7 +1156,7 @@ function renderGanadores() {
   if (cq === 0) { ce.innerHTML = '<div class="no-prizes">Sin premios configurados</div>'; }
   else {
     let ch = '';
-    for (let i = 0; i < cq; i++) {
+    for (let i = 0; i < Math.max(cq, prevConsuelo.length); i++) {
       const k = prevConsuelo[i];
       if (k) {
         const owner = getOwnerName(k);
@@ -1112,7 +1176,7 @@ function renderGanadores() {
 function renderConsueloDetectados() {
   document.getElementById('statConsuelo').textContent = prevConsuelo.length;
   const el = document.getElementById('listConsuelo');
-  if (!prevConsuelo.length) { el.innerHTML = '<div class="no-prizes">Aún no</div>'; return; }
+  if (!prevConsuelo.length) { el.innerHTML = '<div class="no-prizes">' + (PHASES.indexOf(phase) < 3 ? 'Esperando su fase…' : 'Aún no') + '</div>'; return; }
   el.innerHTML = prevConsuelo.map(k => {
     const owner = getOwnerName(k);
     const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
@@ -1121,16 +1185,13 @@ function renderConsueloDetectados() {
 }
 
 function refreshOwnerViews() {
-  renderConsueloDetectados();
-  renderPrizeListWithOwner('terna', prevPrizes.terna, 'listTerna');
-  renderPrizeListWithOwner('quintina', prevPrizes.quintina, 'listQuintina');
-  renderPrizeListWithOwner('lleno', prevPrizes.lleno, 'listLleno');
-  renderGanadores();
+  renderAllViews();
 }
 
 // recalc already calls renderPrizeListWithOwner and renderGanadores internally
 
 // Init pack names grid on load
 initPackNamesGrid();
+renderAllViews();
 
 </script>
