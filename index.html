@@ -483,6 +483,11 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
       <div style="font-size:0.72rem;color:var(--muted)">
         Asigná un nombre a cada pack. Al detectar un ganador se mostrará automáticamente.
       </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:0.78rem;color:var(--text);cursor:pointer">
+        <input type="checkbox" id="chkSoloVendidos" checked onchange="toggleSoloVendidos()" style="margin-top:2px;accent-color:var(--accent)">
+        <span>Solo juegan los packs con nombre <span style="color:var(--muted)">(un pack vacío = sin vender, no participa de ningún premio)</span></span>
+      </label>
+      <div id="packStatus" style="font-size:0.74rem;color:var(--muted)"></div>
       <input type="text" class="pack-search" id="packSearch" placeholder="🔍 Buscar pack por número o nombre..." oninput="filterPackNames()">
       <div class="pack-names-actions">
         <button class="btn-sm" onclick="clearAllPackNames()">Limpiar todo</button>
@@ -494,9 +499,13 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
         <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(480px,95vw);display:flex;flex-direction:column;gap:12px">
           <div style="font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem">📋 Importar lista de nombres</div>
           <div style="font-size:0.75rem;color:var(--muted);line-height:1.5">
-            Pegá una lista con un nombre por línea. El orden define el pack (línea 1 → Pack 1, línea 2 → Pack 2, etc.).<br>
+            Pegá una lista con un nombre por línea. El orden define el pack (línea 1 → Pack 1, línea 2 → Pack 2, etc.). <b>Una línea vacía deja ese pack sin vender</b> (también <code style="background:var(--bg);padding:1px 4px;border-radius:3px">3.</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">vacío</code>).<br>
             También se reconoce el formato <code style="background:var(--bg);padding:1px 4px;border-radius:3px">P001 — Nombre</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">1. Nombre</code>.
           </div>
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:0.76rem;color:var(--text);cursor:pointer">
+            <input type="checkbox" id="importReplace" checked style="margin-top:2px;accent-color:var(--accent)">
+            <span>Reemplazar todos los nombres <span style="color:var(--muted)">(los packs que no estén en la lista o queden vacíos pasan a "sin vender")</span></span>
+          </label>
           <textarea id="importTextarea" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.82rem;padding:10px;min-height:160px;resize:vertical;outline:none" placeholder="Juan Pérez&#10;María García&#10;Carlos López&#10;..."></textarea>
           <div id="importPreview" style="font-size:0.72rem;color:var(--muted)"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -554,6 +563,9 @@ let seqKeys = { terna: new Set(), quintina: new Set(), lleno: new Set() };
 let round = 0;              // cada recalculo = una ronda (para empates)
 let frozen = { terna: null, quintina: null, lleno: null }; // lista fijada al salir de la fase
 let frozenConsuelo = null;
+const PACK_NAMES = {}; // packNum (1-100) -> string
+let soloVendidos = true; // true: los packs sin nombre (sin vender) no participan
+let lastActiveSig = null;
 let removed = { terna: new Set(), quintina: new Set(), lleno: new Set() }; // ganadores eliminados a mano (pueden ir a consuelo)
 
 // === INIT ===
@@ -578,7 +590,8 @@ function getRange() {
 }
 function updatePackCount() {
   const r = getRange();
-  const count = r.hasta - r.desde + 1;
+  let count = 0;
+  for (let p = r.desde; p <= r.hasta; p++) if (typeof packActivo === 'function' ? packActivo(p) : true) count++;
   document.getElementById('packCount').textContent = count;
   document.getElementById('cartonCount').textContent = count * 3;
 }
@@ -761,28 +774,35 @@ function closeImportModal() {
 
 function doImportNames() {
   const raw = document.getElementById('importTextarea').value;
-  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  let imported = 0;
-  lines.forEach((line, idx) => {
-    // Try formats: "P001 — Name", "P001 - Name", "1. Name", "1 Name", or just "Name"
-    let packNum = null;
+  const replaceAll = document.getElementById('importReplace').checked;
+  const lines = raw.split(/\r?\n/);
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop(); // ignora vacías del final
+  const next = replaceAll ? {} : Object.assign({}, PACK_NAMES);
+  let imported = 0, empties = 0;
+  const EMPTY_WORD = /^(vac[ií]o|libre|sin vender|disponible|-+|—+)$/i;
+  lines.forEach((rawLine, idx) => {
+    const line = rawLine.trim();
+    let packNum = idx + 1;   // la posición cuenta aunque la línea esté vacía
     let name = line;
-    const m1 = line.match(/^P?0*(\d+)\s*[—\-\.]\s*(.+)/i);
-    const m2 = line.match(/^(\d+)\s+(.+)/);
+    const m1 = line.match(/^P?0*(\d+)\s*[—\-\.:)]\s*(.+)$/i);
+    const m2 = line.match(/^(\d+)\s+(.+)$/);
+    const mEmpty = line.match(/^P?0*(\d+)\s*[—\-\.:)]?\s*$/i);   // "3", "3." o "P003 —" = pack 3 sin vender
     if (m1) { packNum = parseInt(m1[1]); name = m1[2].trim(); }
     else if (m2 && parseInt(m2[1]) >= 1 && parseInt(m2[1]) <= 100) { packNum = parseInt(m2[1]); name = m2[2].trim(); }
-    else { packNum = idx + 1; name = line.trim(); }
-
-    if (packNum >= 1 && packNum <= 100 && name) {
-      PACK_NAMES[packNum] = name;
-      const inp = document.getElementById('pn-' + packNum);
-      if (inp) { inp.value = name; inp.classList.add('has-name'); }
-      imported++;
-    }
+    else if (mEmpty) { packNum = parseInt(mEmpty[1]); name = ''; }
+    if (EMPTY_WORD.test(name)) name = '';
+    if (packNum < 1 || packNum > 100) return;
+    if (name) { next[packNum] = name; imported++; }
+    else { delete next[packNum]; empties++; }
   });
-  refreshOwnerViews();
-  document.getElementById('importPreview').textContent = '✓ ' + imported + ' nombres importados.';
-  setTimeout(() => closeImportModal(), 800);
+  for (let i = 1; i <= 100; i++) {
+    if (next[i]) PACK_NAMES[i] = next[i]; else delete PACK_NAMES[i];
+    const inp = document.getElementById('pn-' + i);
+    if (inp) { inp.value = PACK_NAMES[i] || ''; inp.classList.toggle('has-name', !!PACK_NAMES[i]); }
+  }
+  participationChanged();
+  document.getElementById('importPreview').textContent = '✓ ' + imported + ' nombres importados' + (replaceAll ? ' · ' + (100 - namedCount()) + ' packs sin vender' : '') + '.';
+  setTimeout(() => closeImportModal(), 1200);
 }
 
 document.getElementById('importTextarea').addEventListener('input', function() {
@@ -843,6 +863,7 @@ function recalc() {
   // 1) Registrar en orden cronológico qué cartones alcanzan cada nivel (siempre, en cualquier fase)
   const cur = { terna: [], quintina: [], lleno: [] };
   for (let p = r.desde - 1; p <= r.hasta - 1; p++) {
+    if (!packActivo(p + 1)) continue; // pack sin vender: no participa
     const packCards = PACKS[p];
     for (let c = 0; c < 3; c++) {
       const key = `P${(p+1).toString().padStart(3,'0')}-C${c+1}`;
@@ -1042,7 +1063,35 @@ renderGanadores();
 
 
 // ===== PACK NAMES REGISTRY =====
-const PACK_NAMES = {}; // packNum (1-100) -> string
+
+function namedCount() { return Object.keys(PACK_NAMES).length; }
+// Un pack juega si: el filtro está apagado, o todavía no se cargó ningún nombre, o el pack tiene dueño
+function packActivo(num) { return !soloVendidos || namedCount() === 0 || !!PACK_NAMES[num]; }
+function activeSignature() { let s = ''; for (let i = 1; i <= 100; i++) s += packActivo(i) ? '1' : '0'; return s; }
+
+// Cuando cambia quién participa se recalcula la partida desde el principio (como si los packs sin vender nunca hubieran jugado)
+function participationChanged() {
+  const sig = activeSignature();
+  const changed = (sig !== lastActiveSig);
+  lastActiveSig = sig;
+  updatePackCount();
+  updatePackStatus();
+  if (changed) rebuildFromHistory(); else renderAllViews();
+}
+
+function toggleSoloVendidos() {
+  soloVendidos = document.getElementById('chkSoloVendidos').checked;
+  participationChanged();
+}
+
+function updatePackStatus() {
+  const el = document.getElementById('packStatus');
+  if (!el) return;
+  const n = namedCount();
+  if (n === 0) el.innerHTML = 'Todavía no cargaste nombres: <b>juegan todos los packs</b>.';
+  else if (!soloVendidos) el.innerHTML = `${n} packs con nombre · filtro apagado: <b>juegan todos</b>.`;
+  else el.innerHTML = `<b>${n}</b> packs vendidos · <b>${100 - n}</b> sin vender (no juegan).`;
+}
 
 function initPackNamesGrid() {
   const grid = document.getElementById('packNamesGrid');
@@ -1051,7 +1100,7 @@ function initPackNamesGrid() {
     html += `<div class="pack-name-row" id="pnrow-${i}">
       <span class="pack-name-num">P${String(i).padStart(3,'0')}</span>
       <input type="text" class="pack-name-input" id="pn-${i}"
-        placeholder="Nombre del dueño..."
+        placeholder="Vacío = sin vender (no juega)"
         maxlength="50"
         oninput="onPackNameInput(${i})"
         value="">
@@ -1070,7 +1119,7 @@ function onPackNameInput(num) {
     delete PACK_NAMES[num];
     inp.classList.remove('has-name');
   }
-  refreshOwnerViews();
+  participationChanged();
 }
 
 function filterPackNames() {
@@ -1092,7 +1141,7 @@ function clearAllPackNames() {
     const inp = document.getElementById('pn-' + i);
     if (inp) { inp.value = ''; inp.classList.remove('has-name'); }
   }
-  refreshOwnerViews();
+  participationChanged();
 }
 
 function exportPackNames() {
@@ -1240,6 +1289,9 @@ function refreshOwnerViews() {
 
 // Init pack names grid on load
 initPackNamesGrid();
+lastActiveSig = activeSignature();
+updatePackStatus();
+updatePackCount();
 renderAllViews();
 
 </script>
