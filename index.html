@@ -668,7 +668,6 @@ function renderHistorial() {
 function applyPhase(to) {
   // Al salir de una fase se congela su lista: lo que pase después ya no se registra en ella
   if (phase === 'terna' || phase === 'quintina' || phase === 'lleno') frozen[phase] = [...prevPrizes[phase]];
-  else if (phase === 'consuelo') frozenConsuelo = [...prevConsuelo];
   phase = to;
   recalc();
 }
@@ -687,8 +686,8 @@ function avanzarFase() {
 function quitarGanador(type, key) {
   const owner = getOwnerName(key);
   const name = key + (owner ? ' — ' + owner : '');
-  const lbl = { terna: 'las Ternas', quintina: 'las Quintinas' }[type];
-  if (!confirm('¿Eliminar a ' + name + ' de ' + lbl + '?\n\nDeja de ser ganador y su pack puede participar por consuelo. Si había otro cartón esperando, ocupa su lugar.')) return;
+  const lbl = { terna: 'las Ternas', quintina: 'las Quintinas', lleno: 'los Cartones Llenos' }[type];
+  if (!confirm('¿Eliminar a ' + name + ' de ' + lbl + '?\n\n' + (type === 'lleno' ? 'Deja de ser ganador y pasa a participar por consuelo (si su pack no ganó otro premio). Si había otro cartón lleno esperando, ocupa su lugar.' : 'Deja de ser ganador y su pack puede participar por consuelo. Si había otro cartón esperando, ocupa su lugar.') + '')) return;
   // si estaba registrado a mano en Ganadores, se quita también (Retroceder lo restituye)
   const manual = [];
   (WINNERS[type] || []).forEach((w, i) => { if (w && w.pack === key) { manual.push({ type, slot: i, w }); WINNERS[type][i] = null; } });
@@ -1163,10 +1162,22 @@ function getOwnerName(packKey) {
 // ===== PATCH renderPrizeList to show owner name =====
 // Override after original definition
 
+// Qué pasó con un cartón lleno eliminado respecto del consuelo
+function consueloStatus(k) {
+  if (PHASES.indexOf(phase) < 3) return 'pasará a consuelo';
+  if (prevConsuelo.includes(k)) return '→ consuelo ✓';
+  const packOf = x => { const m = String(x).match(/P\d+/); return m ? m[0] : null; };
+  const pk = packOf(k);
+  const otros = [...prevPrizes.terna, ...prevPrizes.quintina, ...prevPrizes.lleno];
+  ['terna','quintina','lleno'].forEach(t => (WINNERS[t] || []).forEach(w => { if (w && w.pack) otros.push(w.pack); }));
+  if (otros.some(x => packOf(x) === pk)) return 'sin consuelo: su pack ya ganó otro premio';
+  return 'sin consuelo: fuera del tope';
+}
+
 function renderPrizeListWithOwner(type, prizes, elId, emptyText) {
   const el = document.getElementById(elId);
   if (!el) return;
-  const canRemove = (type === 'terna' || type === 'quintina');
+  const canRemove = (type === 'terna' || type === 'quintina' || type === 'lleno');
   let html = '';
   if (!prizes || prizes.size === 0) {
     html = '<div class="no-prizes">' + (emptyText || 'Aún no') + '</div>';
@@ -1174,13 +1185,13 @@ function renderPrizeListWithOwner(type, prizes, elId, emptyText) {
     html = [...prizes].map(k => {
       const owner = getOwnerName(k);
       const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
-      const del = canRemove ? `<button class="tag-del" title="Eliminar ganador (su pack puede participar por consuelo)" onclick="quitarGanador('${type}','${k}')">✕</button>` : '';
+      const del = canRemove ? `<button class="tag-del" title="Eliminar ganador (puede participar por consuelo)" onclick="quitarGanador('${type}','${k}')">✕</button>` : '';
       return `<div class="prize-tag"><span>${k}${ownerSpan}</span>${del}</div>`;
     }).join('');
   }
   if (canRemove && removed[type] && removed[type].size) {
     html += '<div class="removed-note">Eliminados: ' + [...removed[type]].map(k =>
-      `<span class="rm-chip">${k}<button title="Restituir como ganador" onclick="restaurarGanador('${type}','${k}')">↺</button></span>`).join('') + '</div>';
+      `<span class="rm-chip">${k}${type === 'lleno' ? ' <i style="color:var(--muted)">(' + consueloStatus(k) + ')</i>' : ''}<button title="Restituir como ganador" onclick="restaurarGanador('${type}','${k}')">↺</button></span>`).join('') + '</div>';
   }
   el.innerHTML = html;
 }
@@ -1260,7 +1271,7 @@ function renderGanadores() {
         ch += `<div class="ganador-row consuelo-col">
           <span class="ganador-num">#${i+1}</span>
           <span class="ganador-name">${owner ? escHtml(owner) : '<em style="color:var(--muted)">sin nombre</em>'}</span>
-          <span class="ganador-pack">${escHtml(k)}</span>
+          <span class="ganador-pack">${removed.lleno.has(k) ? 'ex lleno · ' : ''}${escHtml(k)}</span>
         </div>`;
       } else {
         ch += `<div class="slot-empty" style="cursor:default"><span class="slot-num">#${i+1}</span><span>Esperando cartón lleno sin premio…</span></div>`;
@@ -1277,7 +1288,8 @@ function renderConsueloDetectados() {
   el.innerHTML = prevConsuelo.map(k => {
     const owner = getOwnerName(k);
     const ownerSpan = owner ? ` <span style="color:var(--accent);font-size:0.75rem">— ${escHtml(owner)}</span>` : '';
-    return `<div class="prize-tag">${k}${ownerSpan}</div>`;
+    const ex = removed.lleno.has(k) ? ' <span style="color:var(--muted);font-size:0.68rem">(ex cartón lleno)</span>' : '';
+    return `<div class="prize-tag">${k}${ownerSpan}${ex}</div>`;
   }).join('');
 }
 
