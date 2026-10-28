@@ -499,7 +499,7 @@ body { padding-inline: 16px; padding-block: 12px; display: flex; flex-direction:
         <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(480px,95vw);display:flex;flex-direction:column;gap:12px">
           <div style="font-family:'Nunito',sans-serif;font-weight:800;font-size:1rem">📋 Importar lista de nombres</div>
           <div style="font-size:0.75rem;color:var(--muted);line-height:1.5">
-            Pegá una lista con un nombre por línea. El orden define el pack (línea 1 → Pack 1, línea 2 → Pack 2, etc.). <b>Una línea vacía deja ese pack sin vender</b> (también <code style="background:var(--bg);padding:1px 4px;border-radius:3px">3.</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">vacío</code>).<br>
+            Pegá una lista con un nombre por línea (acepta números con emoji tipo 1️⃣ y quita los 🎀). El orden define el pack (línea 1 → Pack 1, línea 2 → Pack 2, etc.). <b>Una línea vacía deja ese pack sin vender</b> (también <code style="background:var(--bg);padding:1px 4px;border-radius:3px">3.</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">vacío</code>).<br>
             También se reconoce el formato <code style="background:var(--bg);padding:1px 4px;border-radius:3px">P001 — Nombre</code> o <code style="background:var(--bg);padding:1px 4px;border-radius:3px">1. Nombre</code>.
           </div>
           <label style="display:flex;gap:8px;align-items:flex-start;font-size:0.76rem;color:var(--text);cursor:pointer">
@@ -771,6 +771,15 @@ function closeImportModal() {
   document.getElementById('importModal').style.display = 'none';
 }
 
+// Limpia una línea pegada (p. ej. de WhatsApp): convierte 1️⃣0️⃣ en 10 y quita emojis (🎀, 🙌🏼, etc.)
+function cleanImportLine(s) {
+  return String(s)
+    .replace(/([0-9])\uFE0F?\u20E3/g, '$1')
+    .replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\uFE0F\u200D\u20E3\u00A0]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function doImportNames() {
   const raw = document.getElementById('importTextarea').value;
   const replaceAll = document.getElementById('importReplace').checked;
@@ -780,7 +789,7 @@ function doImportNames() {
   let imported = 0, empties = 0;
   const EMPTY_WORD = /^(vac[ií]o|libre|sin vender|disponible|-+|—+)$/i;
   lines.forEach((rawLine, idx) => {
-    const line = rawLine.trim();
+    const line = cleanImportLine(rawLine);
     let packNum = idx + 1;   // la posición cuenta aunque la línea esté vacía
     let name = line;
     const m1 = line.match(/^P?0*(\d+)\s*[—\-\.:)]\s*(.+)$/i);
